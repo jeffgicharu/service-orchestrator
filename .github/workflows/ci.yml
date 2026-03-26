@@ -15,4 +15,4 @@ jobs:
           distribution: 'temurin'
           cache: maven
       - run: mvn verify -B
-      - run: docker build -t $project:${{ github.sha }} .
+      - run: docker build -t service-orchestrator:${{ github.sha }} .
