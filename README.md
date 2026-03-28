@@ -1,117 +1,130 @@
 # Service Orchestrator
 
-A saga-based distributed transaction coordinator. Executes multi-service operations — P2P transfers, customer onboarding — as ordered step sequences, and automatically compensates (rolls back) all completed steps in reverse order when any step fails. Maintains data consistency across microservices without distributed locks or two-phase commit.
+When a customer sends money, the system has to do five things: validate the sender, debit their wallet, credit the receiver, record the transaction, and send an SMS. Five different services, five different databases. If the third one fails, the first two have already committed — the sender's money is gone but the receiver never got it.
 
-In a microservices architecture, a single business operation (e.g., "send money") touches 4–5 services. If service #3 fails, services #1 and #2 have already committed their changes. The Saga pattern solves this by defining a compensating action for every forward action, guaranteeing that the system returns to a consistent state even on partial failure.
+You can't just rollback across services like you would inside a single database. Instead, you need each step to have a way to undo itself. That's what this project does. It runs through a sequence of steps, and if any step fails, it goes back and undoes every step that already succeeded — in reverse order.
 
-## Why This Architecture
+This is called the **Saga pattern**, and it's how real distributed systems handle transactions without locking everything.
 
-| Problem | Solution | Implementation |
-|---|---|---|
-| Transfer debits sender but fails to credit receiver | Compensating transactions | Every `SagaStep` has `execute()` and `compensate()` — failure triggers reverse-order rollback |
-| Don't know which steps completed before failure | Step execution logging | Every execute and compensate logged with result, duration, and detail |
-| Compensation itself can fail | Compensation failure tracking | If compensation fails, saga enters FAILED state for manual intervention |
-| Need different sagas for different operations | Pluggable saga definitions | Implement `SagaDefinition` + `SagaStep` interfaces — auto-registered via Spring |
-| Can't measure reliability | Saga statistics | Success rate, completion count, compensation count tracked per saga type |
+## What It Does
+
+- **Runs multi-step operations** across services as an ordered sequence
+- **Automatically rolls back** when something fails — every completed step gets compensated in reverse order
+- **Logs every action** — both forward executions and compensations, with timing and results
+- **Ships with two built-in sagas** you can run immediately
+- **Easy to extend** — add a new saga by implementing two interfaces and annotating with `@Component`
 
 ## Built-In Sagas
 
-### P2P Transfer (5 steps across 4 services)
+### P2P Money Transfer
 
-| # | Step | Service | Execute | Compensate |
-|---|---|---|---|---|
-| 1 | Validate Sender | Auth | Verify identity | — |
-| 2 | Debit Sender | Wallet | Deduct amount | Refund amount |
-| 3 | Credit Receiver | Wallet | Add amount | Reverse credit |
-| 4 | Record Transaction | Ledger | Write record | Reverse record |
-| 5 | Send Notification | Notification | Send SMS | — |
+Simulates sending money across four different services:
 
-### Customer Onboarding (5 steps across 5 services)
-
-| # | Step | Service | Execute | Compensate |
-|---|---|---|---|---|
-| 1 | Create Profile | CRM | Create customer | Delete profile |
-| 2 | KYC Verification | KYC | Run checks | Remove KYC record |
-| 3 | Create Wallet | Wallet | Open account | Deactivate wallet |
-| 4 | Welcome Bonus | Promotions | Credit KES 50 | Reverse bonus |
-| 5 | Welcome SMS | Notification | Send message | — |
-
-## How Compensation Works
-
-```
-Happy path:
-  Step 1 ✓ → Step 2 ✓ → Step 3 ✓ → Step 4 ✓ → Step 5 ✓ → COMPLETED
-
-Failure at Step 3:
-  Step 1 ✓ → Step 2 ✓ → Step 3 ✗ (FAILED)
-                          ↓
-  Compensate Step 2 ✓ ← Compensate Step 1 ✓ → COMPENSATED
-
-Compensation failure:
-  Step 1 ✓ → Step 2 ✓ → Step 3 ✗ (FAILED)
-                          ↓
-  Compensate Step 2 ✗ → FAILED (requires manual intervention)
-```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
+| Step | What it does | If it needs to undo |
 |---|---|---|
-| POST | `/api/sagas/execute?sagaType=P2P_TRANSFER` | Execute a saga with context |
-| GET | `/api/sagas/{sagaId}` | Saga instance status |
-| GET | `/api/sagas/{sagaId}/logs` | Step execution + compensation logs |
-| GET | `/api/sagas/stats` | Success/compensation/failure counts |
+| 1. Validate Sender | Checks the sender exists | Nothing to undo |
+| 2. Debit Sender | Takes money from sender's wallet | Refunds the money |
+| 3. Credit Receiver | Adds money to receiver's wallet | Reverses the credit |
+| 4. Record Transaction | Writes to the ledger | Removes the record |
+| 5. Send Notification | Sends confirmation SMS | Nothing to undo |
 
-## Usage
+If step 3 fails (say the receiver's account is suspended), step 2 gets compensated automatically — the sender gets their money back.
+
+### Customer Onboarding
+
+Simulates registering a new customer across five services:
+
+| Step | What it does | If it needs to undo |
+|---|---|---|
+| 1. Create Profile | Creates customer in CRM | Deletes the profile |
+| 2. KYC Verification | Runs identity checks | Removes KYC record |
+| 3. Create Wallet | Opens a new wallet | Deactivates the wallet |
+| 4. Welcome Bonus | Credits KES 50 | Reverses the bonus |
+| 5. Welcome SMS | Sends welcome message | Nothing to undo |
+
+## What Happens When Things Fail
+
+**Everything works:**
+```
+Step 1 ✓ → Step 2 ✓ → Step 3 ✓ → Step 4 ✓ → Step 5 ✓ → COMPLETED
+```
+
+**Step 3 fails:**
+```
+Step 1 ✓ → Step 2 ✓ → Step 3 ✗
+                        ↓
+Undo Step 2 ✓ → Undo Step 1 ✓ → COMPENSATED
+```
+
+**Step 3 fails AND the undo for Step 2 also fails:**
+```
+Step 1 ✓ → Step 2 ✓ → Step 3 ✗
+                        ↓
+Undo Step 2 ✗ → FAILED (needs manual intervention)
+```
+
+The system never leaves data in an inconsistent state silently. It either completes, fully compensates, or marks itself as FAILED so someone can investigate.
+
+## Quick Start
 
 ```bash
-# Execute a P2P transfer saga
+mvn spring-boot:run
+# Swagger UI: http://localhost:8686/swagger-ui.html
+```
+
+## Try It Out
+
+```bash
+# Run a successful transfer
 curl -X POST "http://localhost:8686/api/sagas/execute?sagaType=P2P_TRANSFER" \
   -H "Content-Type: application/json" \
   -d '{"sender":"+254700000001","receiver":"+254700000002","amount":5000}'
 
-# Execute with simulated failure (triggers compensation)
+# Run a transfer that fails at step 3 (triggers compensation)
 curl -X POST "http://localhost:8686/api/sagas/execute?sagaType=P2P_TRANSFER" \
   -H "Content-Type: application/json" \
   -d '{"sender":"+254700000001","receiver":"+254700000002","amount":5000,"simulateFailure":true}'
 
-# View compensation logs
+# See the compensation in the logs
 curl http://localhost:8686/api/sagas/SAGA-XXXXXXXXXX/logs
 ```
 
-## Extending with New Sagas
+## Adding Your Own Saga
+
+Create a class that implements `SagaDefinition`, define your steps, and annotate with `@Component`. It gets registered automatically at startup:
 
 ```java
 @Component
 public class MyCustomSaga implements SagaDefinition {
-    @Override public String getType() { return "MY_SAGA"; }
-    @Override public List<SagaStep> getSteps() {
-        return List.of(
-            new SagaStep() {
-                public String getName() { return "STEP_ONE"; }
-                public StepOutcome execute(Map<String, Object> ctx) { /* ... */ }
-                public StepOutcome compensate(Map<String, Object> ctx) { /* ... */ }
-            }
-        );
+    public String getType() { return "MY_SAGA"; }
+    public List<SagaStep> getSteps() {
+        return List.of(/* your steps */);
     }
 }
 ```
 
-Any `@Component` implementing `SagaDefinition` is auto-registered at startup.
+Each step implements `execute()` (the forward action) and `compensate()` (how to undo it).
 
-## Running
+## API Reference
 
-```bash
-mvn spring-boot:run   # http://localhost:8686/swagger-ui.html
-```
+| Method | Endpoint | What it does |
+|---|---|---|
+| POST | `/api/sagas/execute?sagaType=P2P_TRANSFER` | Run a saga |
+| GET | `/api/sagas/{sagaId}` | Check saga status |
+| GET | `/api/sagas/{sagaId}/logs` | Step execution and compensation logs |
+| GET | `/api/sagas/stats` | Success/compensation/failure counts |
 
-## Testing
+## Built With
+
+Spring Boot 3.2, Java 17, Spring Data JPA, PostgreSQL (H2 for dev), Docker, GitHub Actions CI.
+
+## Tests
 
 ```bash
 mvn test   # 11 tests
 ```
 
-Covers: successful P2P transfer, credit failure with compensation, compensation logging, customer onboarding success, KYC failure compensation, wallet failure with correct rollback count, unknown saga rejection, retrieval by ID, stats, sender validation, step duration tracking.
+Covers successful P2P transfer, credit failure with compensation, compensation logging, customer onboarding (success + KYC failure + wallet failure with correct rollback count), unknown saga rejection, retrieval by ID, stats, sender validation, and step duration tracking.
 
 ## License
 
