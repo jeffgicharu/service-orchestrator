@@ -1,18 +1,18 @@
 # Service Orchestrator
 
-When a customer sends money, the system has to do five things: validate the sender, debit their wallet, credit the receiver, record the transaction, and send an SMS. Five different services, five different databases. If the third one fails, the first two have already committed — the sender's money is gone but the receiver never got it.
+When a customer sends money, the system has to do five things: validate the sender, debit their wallet, credit the receiver, record the transaction, and send an SMS. Five different services, five different databases. If the third one fails, the first two have already committed, and the sender's money is gone but the receiver never got it.
 
-You can't just rollback across services like you would inside a single database. Instead, you need each step to have a way to undo itself. That's what this project does. It runs through a sequence of steps, and if any step fails, it goes back and undoes every step that already succeeded — in reverse order.
+You can't just rollback across services like you would inside a single database. Instead, you need each step to have a way to undo itself. That's what this project does. It runs through a sequence of steps, and if any step fails, it goes back and undoes every step that already succeeded, in reverse order.
 
 This is called the **Saga pattern**, and it's how real distributed systems handle transactions without locking everything.
 
 ## What It Does
 
 - **Runs multi-step operations** across services as an ordered sequence
-- **Automatically rolls back** when something fails — every completed step gets compensated in reverse order
-- **Logs every action** — both forward executions and compensations, with timing and results
+- **Automatically rolls back** when something fails. Every completed step gets compensated in reverse order
+- **Logs every action**: both forward executions and compensations, with timing and results
 - **Ships with two built-in sagas** you can run immediately
-- **Easy to extend** — add a new saga by implementing two interfaces and annotating with `@Component`
+- **Easy to extend**: add a new saga by implementing two interfaces and annotating with `@Component`
 
 ## Built-In Sagas
 
@@ -28,7 +28,7 @@ Simulates sending money across four different services:
 | 4. Record Transaction | Writes to the ledger | Removes the record |
 | 5. Send Notification | Sends confirmation SMS | Nothing to undo |
 
-If step 3 fails (say the receiver's account is suspended), step 2 gets compensated automatically — the sender gets their money back.
+If step 3 fails (say the receiver's account is suspended), step 2 gets compensated automatically. The sender gets their money back.
 
 ### Customer Onboarding
 
