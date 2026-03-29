@@ -132,6 +132,8 @@ public class SagaOrchestrator {
         log.info("Saga fully compensated: {}", saga.getSagaId());
     }
 
+    // ─── QUERIES ────────────────────────────────────────────────────
+
     public SagaInstance getById(String sagaId) {
         return sagaRepo.findBySagaId(sagaId)
                 .orElseThrow(() -> new IllegalArgumentException("Saga not found: " + sagaId));
@@ -142,16 +144,79 @@ public class SagaOrchestrator {
         return stepLogRepo.findBySagaIdOrderByStepOrder(saga.getId());
     }
 
+    public org.springframework.data.domain.Page<SagaInstance> listAll(org.springframework.data.domain.Pageable pageable) {
+        return sagaRepo.findAllByOrderByStartedAtDesc(pageable);
+    }
+
+    public org.springframework.data.domain.Page<SagaInstance> listByStatus(SagaStatus status, org.springframework.data.domain.Pageable pageable) {
+        return sagaRepo.findByStatusOrderByStartedAtDesc(status, pageable);
+    }
+
+    public org.springframework.data.domain.Page<SagaInstance> listByType(String sagaType, org.springframework.data.domain.Pageable pageable) {
+        return sagaRepo.findBySagaTypeOrderByStartedAtDesc(sagaType, pageable);
+    }
+
+    // ─── RETRY ──────────────────────────────────────────────────────
+
+    @Transactional
+    public SagaInstance retry(String sagaId) {
+        SagaInstance original = getById(sagaId);
+        if (original.getStatus() != SagaStatus.FAILED && original.getStatus() != SagaStatus.COMPENSATED) {
+            throw new IllegalStateException("Only FAILED or COMPENSATED sagas can be retried. Current: " + original.getStatus());
+        }
+
+        // Parse the original context back from the stored payload
+        Map<String, Object> context = new HashMap<>();
+        // The payload is stored as a Map.toString(), so we rebuild basic context
+        context.put("retryOf", original.getSagaId());
+        context.put("originalPayload", original.getPayload());
+
+        // Re-execute with same saga type
+        return execute(original.getSagaType(), context);
+    }
+
+    // ─── STATS ──────────────────────────────────────────────────────
+
     public Map<String, Object> getStats() {
         long total = sagaRepo.count();
-        long completed = sagaRepo.findByStatusOrderByStartedAtDesc(SagaStatus.COMPLETED).size();
-        long compensated = sagaRepo.findByStatusOrderByStartedAtDesc(SagaStatus.COMPENSATED).size();
-        long failed = sagaRepo.findByStatusOrderByStartedAtDesc(SagaStatus.FAILED).size();
+        long completed = sagaRepo.countByStatus(SagaStatus.COMPLETED);
+        long compensated = sagaRepo.countByStatus(SagaStatus.COMPENSATED);
+        long failed = sagaRepo.countByStatus(SagaStatus.FAILED);
+        long inProgress = sagaRepo.countByStatus(SagaStatus.IN_PROGRESS);
 
-        return Map.of("total", total, "completed", completed,
-                "compensated", compensated, "failed", failed,
-                "successRate", total > 0 ? Math.round((double) completed / total * 100) : 0);
+        // Per-type breakdown
+        Map<String, Map<String, Long>> byType = new java.util.LinkedHashMap<>();
+        for (Object[] row : sagaRepo.countByTypeAndStatus()) {
+            String type = row[0].toString();
+            String status = row[1].toString();
+            long count = (Long) row[2];
+            byType.computeIfAbsent(type, k -> new java.util.LinkedHashMap<>()).put(status, count);
+        }
+
+        return Map.of(
+                "total", total,
+                "completed", completed,
+                "compensated", compensated,
+                "failed", failed,
+                "inProgress", inProgress,
+                "successRate", total > 0 ? Math.round((double) completed / total * 100) : 0,
+                "byType", byType
+        );
     }
+
+    // ─── REGISTERED SAGA TYPES ──────────────────────────────────────
+
+    public List<Map<String, Object>> getRegisteredTypes() {
+        return sagaDefinitions.entrySet().stream()
+                .map(e -> Map.<String, Object>of(
+                        "type", e.getKey(),
+                        "steps", e.getValue().getSteps().size(),
+                        "stepNames", e.getValue().getSteps().stream().map(SagaStep::getName).toList()
+                ))
+                .toList();
+    }
+
+    // ─── HELPERS ────────────────────────────────────────────────────
 
     private void logStep(SagaInstance saga, int order, String name, String action,
                          StepResult result, long duration, String detail) {
