@@ -32,6 +32,7 @@ public class SagaInstance {
     private String failureReason;
 
     @OneToMany(mappedBy = "saga", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @OrderBy("stepOrder ASC")
     @Builder.Default
     private List<SagaStepLog> stepLogs = new ArrayList<>();

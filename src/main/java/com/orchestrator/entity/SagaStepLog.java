@@ -14,17 +14,22 @@ public class SagaStepLog {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "saga_id")
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private SagaInstance saga;
 
     private int stepOrder;
     private String stepName;
-    private String action; // EXECUTE or COMPENSATE
+    private String action;
 
     @Enumerated(EnumType.STRING)
     private StepResult result;
 
     private long durationMs;
     private String detail;
+
+    @Column(columnDefinition = "TEXT")
+    private String contextSnapshot;
+
     private LocalDateTime executedAt;
 
     @PrePersist

@@ -68,7 +68,7 @@ public class SagaOrchestrator {
 
             logStep(saga, i + 1, step.getName(), "EXECUTE",
                     outcome.success() ? StepResult.SUCCESS : StepResult.FAILURE,
-                    duration, outcome.detail());
+                    duration, outcome.detail(), context);
 
             if (outcome.success()) {
                 completedSteps.add(i);
@@ -110,13 +110,13 @@ public class SagaOrchestrator {
                 long duration = System.currentTimeMillis() - start;
 
                 logStep(saga, stepIndex + 1, step.getName(), "COMPENSATE",
-                        StepResult.COMPENSATED, duration, outcome.detail());
+                        StepResult.COMPENSATED, duration, outcome.detail(), context);
 
                 log.info("  Compensated step [{}] ({}ms)", step.getName(), duration);
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
                 logStep(saga, stepIndex + 1, step.getName(), "COMPENSATE",
-                        StepResult.FAILURE, duration, "Compensation failed: " + e.getMessage());
+                        StepResult.FAILURE, duration, "Compensation failed: " + e.getMessage(), context);
 
                 log.error("  Compensation FAILED for step [{}]: {}", step.getName(), e.getMessage());
                 saga.setStatus(SagaStatus.FAILED);
@@ -219,7 +219,14 @@ public class SagaOrchestrator {
     // ─── HELPERS ────────────────────────────────────────────────────
 
     private void logStep(SagaInstance saga, int order, String name, String action,
-                         StepResult result, long duration, String detail) {
+                         StepResult result, long duration, String detail,
+                         Map<String, Object> context) {
+        String snapshot = null;
+        try {
+            snapshot = context.toString();
+            if (snapshot.length() > 2000) snapshot = snapshot.substring(0, 2000);
+        } catch (Exception ignored) {}
+
         stepLogRepo.save(SagaStepLog.builder()
                 .saga(saga)
                 .stepOrder(order)
@@ -228,6 +235,7 @@ public class SagaOrchestrator {
                 .result(result)
                 .durationMs(duration)
                 .detail(detail)
+                .contextSnapshot(snapshot)
                 .build());
     }
 }
